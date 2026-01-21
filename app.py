@@ -1,42 +1,60 @@
+"""
+TELEGRAM SIGNAL FORWARDER
+Forwards messages with "🔔 NEW SIGNAL!" header from source to target group
+Deployment: Render.com
+Author: Signal Forwarder
+"""
+
 import os
 import asyncio
 import logging
 import sys
-import re
 from datetime import datetime
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
-from telethon.tl.types import Message, User, Channel
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# Configuration
-API_ID = int(os.getenv('API_ID', 0))
+# ============================================================================
+# CONFIGURATION - EDIT THESE IN RENDER DASHBOARD ENVIRONMENT VARIABLES
+# ============================================================================
+
+# Telegram API credentials (from https://my.telegram.org)
+API_ID = int(os.getenv('API_ID', ''))
 API_HASH = os.getenv('API_HASH', '')
 PHONE_NUMBER = os.getenv('PHONE_NUMBER', '')
-SOURCE_GROUP_URL = os.getenv('SOURCE_GROUP_URL', '')
-TARGET_GROUP_URL = os.getenv('TARGET_GROUP_URL', '')
+
+# Group URLs (get from Telegram group invite links)
+SOURCE_GROUP_URL = os.getenv('SOURCE_GROUP_URL', 'https://t.me/iosassembly')
+TARGET_GROUP_URL = os.getenv('TARGET_GROUP_URL', 'https://t.me/acctdeveloperselling')
+
+# Specific user to forward from (optional)
+SOURCE_USERNAME = os.getenv('SOURCE_USERNAME', '@Systembadgetickverify02')
 
 # Signal configuration
-SOURCE_USERNAME = os.getenv('SOURCE_USERNAME', '').strip()
-SOURCE_USER_ID = int(os.getenv('SOURCE_USER_ID', 0))
 SIGNAL_HEADER = os.getenv('SIGNAL_HEADER', '🔔 NEW SIGNAL!')
 ADD_TIMESTAMP = os.getenv('ADD_TIMESTAMP', 'true').lower() == 'true'
-SEND_CONFIRMATION = os.getenv('SEND_CONFIRMATION', 'true').lower() == 'true'
-FORWARD_DELAY = int(os.getenv('FORWARD_DELAY', 0))
+SEND_CONFIRMATION = os.getenv('SEND_CONFIRMATION', 'false').lower() == 'true'
+FORWARD_DELAY = int(os.getenv('FORWARD_DELAY', '0'))
 
-# Setup logging
+# ============================================================================
+# DO NOT EDIT BELOW THIS LINE UNLESS YOU KNOW WHAT YOU'RE DOING
+# ============================================================================
+
+# Setup logging for Render.com
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout)
+        logging.StreamHandler(sys.stdout)  # Render captures stdout
     ]
 )
 logger = logging.getLogger(__name__)
 
-class SignalForwarder:
+class TelegramSignalForwarder:
+    """Main class for forwarding Telegram signals."""
+    
     def __init__(self):
         self.client = None
         self.source_group = None
@@ -44,8 +62,15 @@ class SignalForwarder:
         self.source_user = None
         self.is_running = False
         
-    def extract_username(self, url):
-        """Extract username from Telegram URL."""
+    def extract_username_from_url(self, url):
+        """
+        Extract username from Telegram URL.
+        
+        Examples:
+        - https://t.me/iosassembly -> iosassembly
+        - https://t.me/joinchat/ABC123 -> joinchat/ABC123
+        - @username -> username
+        """
         if not url:
             return ""
         
@@ -55,215 +80,168 @@ class SignalForwarder:
         elif url.startswith('http://'):
             url = url[7:]
         
-        # Remove domain and get username
+        # Remove 't.me/' prefix
         if url.startswith('t.me/'):
             url = url[5:]
         elif url.startswith('@'):
             url = url[1:]
         
-        # Remove query params and trailing slash
+        # Remove query parameters and trailing slash
         url = url.split('?')[0].rstrip('/')
         
         return url
     
-    async def initialize(self):
-        """Initialize Telegram client and get groups/user."""
-        logger.info("🚀 Initializing Signal Forwarder...")
+    async def initialize_telegram_client(self):
+        """
+        Initialize Telegram client and connect to Telegram.
+        
+        This function will:
+        1. Connect to Telegram using your credentials
+        2. Handle first-time phone verification
+        3. Get the source and target groups
+        4. Find the specific user (if configured)
+        """
+        logger.info("🚀 INITIALIZING TELEGRAM SIGNAL FORWARDER")
+        logger.info("=" * 60)
         
         try:
-            # Create Telegram client
+            # Step 1: Create Telegram client
+            logger.info("📱 Creating Telegram client...")
             self.client = TelegramClient(
                 'signal_forwarder_session',
                 API_ID,
                 API_HASH,
-                device_model="Signal Forwarder",
+                device_model="Signal Forwarder v2.0",
                 system_version="Render Cloud",
                 app_version="2.0.0",
-                connection_retries=5,
+                connection_retries=10,
+                timeout=60,
+                request_retries=5,
                 auto_reconnect=True
             )
             
-            # Connect to Telegram
+            # Step 2: Connect to Telegram
+            logger.info("🔗 Connecting to Telegram servers...")
             await self.client.connect()
             
-            # Check if already authorized
+            # Step 3: Check if we need phone verification
             if not await self.client.is_user_authorized():
-                logger.info("🔐 First time setup - phone verification required")
+                logger.info("🔐 FIRST-TIME SETUP DETECTED")
+                logger.info("📱 Sending verification code request...")
                 await self.client.send_code_request(PHONE_NUMBER)
                 
-                # Get verification code from environment
-                code = os.getenv('TELEGRAM_CODE')
-                if not code:
-                    logger.info("="*50)
-                    logger.info("📱 VERIFICATION REQUIRED")
-                    logger.info("="*50)
-                    logger.info("1. Check Telegram for verification code")
-                    logger.info("2. Add TELEGRAM_CODE environment variable")
-                    logger.info("3. Service will auto-restart")
-                    logger.info("="*50)
+                # Check for verification code in environment
+                verification_code = os.getenv('TELEGRAM_CODE')
+                
+                if verification_code:
+                    logger.info("✅ Found verification code in environment variables")
+                    logger.info("🔑 Signing in with provided code...")
+                    await self.client.sign_in(PHONE_NUMBER, verification_code)
+                    logger.info("✅ Successfully logged in!")
+                else:
+                    logger.info("=" * 60)
+                    logger.info("📱 PHONE VERIFICATION REQUIRED")
+                    logger.info("=" * 60)
+                    logger.info("1️⃣ Check your Telegram app for a verification code")
+                    logger.info("2️⃣ Go to Render.com dashboard")
+                    logger.info("3️⃣ Find your 'signal-forwarder' service")
+                    logger.info("4️⃣ Click 'Environment' tab")
+                    logger.info("5️⃣ Add a new environment variable:")
+                    logger.info("   - Name: TELEGRAM_CODE")
+                    logger.info("   - Value: [the code from Telegram]")
+                    logger.info("6️⃣ Click 'Save Changes'")
+                    logger.info("7️⃣ Wait for auto-restart (about 30 seconds)")
+                    logger.info("=" * 60)
+                    logger.info("⏳ Waiting for verification code...")
                     
-                    # Wait for code
-                    for i in range(300):
+                    # Wait for code (Render will restart when env var is added)
+                    for i in range(180):  # Wait up to 3 minutes
                         await asyncio.sleep(1)
-                        code = os.getenv('TELEGRAM_CODE')
-                        if code:
+                        if i % 30 == 0:  # Log every 30 seconds
+                            logger.info(f"⏱️ Still waiting... ({i+1}/180 seconds)")
+                        
+                        verification_code = os.getenv('TELEGRAM_CODE')
+                        if verification_code:
+                            logger.info("✅ Verification code received!")
+                            await self.client.sign_in(PHONE_NUMBER, verification_code)
                             break
                     
-                    if not code:
-                        logger.error("❌ No verification code provided")
+                    if not verification_code:
+                        logger.error("❌ No verification code provided after 3 minutes")
+                        logger.info("Please add TELEGRAM_CODE environment variable and redeploy")
                         return False
-                
-                await self.client.sign_in(PHONE_NUMBER, code)
-                logger.info("✅ Successfully logged in")
             else:
-                logger.info("✅ Using existing session")
+                logger.info("✅ Using existing session (already logged in)")
             
-            # Get user info
+            # Step 4: Get user information
             me = await self.client.get_me()
-            logger.info(f"👤 Logged in as: {me.first_name} (@{me.username})")
+            logger.info(f"👤 Logged in as: {me.first_name} (@{me.username if me.username else 'no_username'})")
             
-            # Get source group
-            source_username = self.extract_username(SOURCE_GROUP_URL)
-            logger.info(f"🔍 Looking for source group: {source_username}")
-            self.source_group = await self.client.get_entity(source_username)
-            logger.info(f"✅ Source group: {self.source_group.title}")
+            # Step 5: Get source group
+            logger.info("🔍 Finding source group...")
+            source_identifier = self.extract_username_from_url(SOURCE_GROUP_URL)
+            logger.info(f"   Looking for: {source_identifier}")
+            self.source_group = await self.client.get_entity(source_identifier)
+            logger.info(f"✅ Source group found: {self.source_group.title}")
             
-            # Get target group
-            target_username = self.extract_username(TARGET_GROUP_URL)
-            logger.info(f"🔍 Looking for target group: {target_username}")
-            self.target_group = await self.client.get_entity(target_username)
-            logger.info(f"✅ Target group: {self.target_group.title}")
+            # Step 6: Get target group
+            logger.info("🔍 Finding target group...")
+            target_identifier = self.extract_username_from_url(TARGET_GROUP_URL)
+            logger.info(f"   Looking for: {target_identifier}")
+            self.target_group = await self.client.get_entity(target_identifier)
+            logger.info(f"✅ Target group found: {self.target_group.title}")
             
-            # Get source user (specific user to forward from)
-            if SOURCE_USERNAME:
-                logger.info(f"🔍 Looking for source user: {SOURCE_USERNAME}")
+            # Step 7: Get specific user (if configured)
+            if SOURCE_USERNAME and SOURCE_USERNAME != '@Systembadgetickverify02':
+                logger.info(f"🔍 Finding specific user: {SOURCE_USERNAME}")
                 try:
                     self.source_user = await self.client.get_entity(SOURCE_USERNAME)
+                    user_display = self.source_user.username or self.source_user.first_name or f"User {self.source_user.id}"
+                    logger.info(f"✅ Specific user found: {user_display}")
                 except Exception as e:
-                    logger.error(f"❌ Could not find user {SOURCE_USERNAME}: {e}")
-                    # Try to extract from group participants
-                    participants = await self.client.get_participants(self.source_group)
-                    for participant in participants:
-                        if participant.username and participant.username.lower() == SOURCE_USERNAME.replace('@', '').lower():
-                            self.source_user = participant
-                            break
-            elif SOURCE_USER_ID:
-                logger.info(f"🔍 Looking for source user ID: {SOURCE_USER_ID}")
-                try:
-                    self.source_user = await self.client.get_entity(SOURCE_USER_ID)
-                except Exception as e:
-                    logger.error(f"❌ Could not find user ID {SOURCE_USER_ID}: {e}")
-            
-            if self.source_user:
-                user_name = self.source_user.username or self.source_user.first_name or f"User {self.source_user.id}"
-                logger.info(f"✅ Source user: {user_name}")
+                    logger.warning(f"⚠️ Could not find user {SOURCE_USERNAME}: {e}")
+                    logger.info("Will forward signals from any user")
             else:
-                logger.warning("⚠️ No specific user configured - will forward from any user")
+                logger.info("📢 Will forward signals from ANY user in source group")
             
-            # Verify access to groups
-            logger.info("🔑 Verifying group access...")
-            try:
-                await self.client.get_participants(self.source_group, limit=1)
-                logger.info("✅ Can read from source group")
-            except Exception as e:
-                logger.warning(f"⚠️ Limited access to source group: {e}")
+            logger.info("=" * 60)
+            logger.info("✅ INITIALIZATION COMPLETE!")
+            logger.info("=" * 60)
             
-            logger.info("✅ Initialization complete")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Initialization failed: {e}")
+            logger.error(f"❌ INITIALIZATION FAILED: {e}")
+            logger.error("Please check your environment variables:")
+            logger.error(f"API_ID: {'✓ Set' if API_ID else '✗ Missing'}")
+            logger.error(f"API_HASH: {'✓ Set' if API_HASH else '✗ Missing'}")
+            logger.error(f"PHONE_NUMBER: {'✓ Set' if PHONE_NUMBER else '✗ Missing'}")
+            logger.error(f"SOURCE_GROUP_URL: {'✓ Set' if SOURCE_GROUP_URL else '✗ Missing'}")
+            logger.error(f"TARGET_GROUP_URL: {'✓ Set' if TARGET_GROUP_URL else '✗ Missing'}")
             return False
     
     def is_signal_message(self, message_text):
-        """Check if message is a signal message with the required header."""
+        """
+        Check if a message contains the signal header.
+        
+        Returns True if message contains "🔔 NEW SIGNAL!" anywhere in the text.
+        """
         if not message_text:
             return False
         
-        # Check for the exact signal header at the beginning
-        if message_text.strip().startswith(SIGNAL_HEADER):
-            return True
-        
-        # Also check for the header anywhere in the message (case-insensitive)
-        if SIGNAL_HEADER.lower() in message_text.lower():
-            return True
-        
-        return False
+        # Check if signal header is in the message
+        return SIGNAL_HEADER in message_text
     
-    def extract_signal_details(self, message_text):
-        """Extract signal details from message."""
-        if not message_text:
-            return {}
+    async def forward_signal_message(self, event):
+        """
+        Process and forward a signal message.
         
-        details = {
-            'currency_pair': None,
-            'direction': None,
-            'entry_time': None,
-            'martingale_levels': []
-        }
-        
-        try:
-            # Extract currency pair (look for pattern like EUR/CAD)
-            currency_pattern = r'🇪🇺\s*EUR/CAD\s*🇨🇦|EUR/CAD'
-            currency_match = re.search(currency_pattern, message_text, re.IGNORECASE)
-            if currency_match:
-                details['currency_pair'] = 'EUR/CAD'
-            
-            # Extract direction (SELL/BUY)
-            direction_pattern = r'Direction:\s*(SELL|BUY)'
-            direction_match = re.search(direction_pattern, message_text, re.IGNORECASE)
-            if direction_match:
-                details['direction'] = direction_match.group(1)
-            
-            # Extract entry time
-            entry_pattern = r'Entry:\s*([0-9]{1,2}:[0-9]{2}\s*[AP]M)'
-            entry_match = re.search(entry_pattern, message_text, re.IGNORECASE)
-            if entry_match:
-                details['entry_time'] = entry_match.group(1)
-            
-            # Extract martingale levels
-            martingale_pattern = r'Level\s*(\d+)\s*→\s*([0-9]{1,2}:[0-9]{2}\s*[AP]M)'
-            martingale_matches = re.findall(martingale_pattern, message_text, re.IGNORECASE)
-            for level, time in martingale_matches:
-                details['martingale_levels'].append(f"Level {level} → {time}")
-            
-        except Exception as e:
-            logger.error(f"Error extracting signal details: {e}")
-        
-        return details
-    
-    def format_forward_message(self, original_text, signal_details, sender_name):
-        """Format the message for forwarding."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Create header
-        if ADD_TIMESTAMP:
-            header = f"📡 **SIGNAL FORWARDED**\n"
-            header += f"🕒 {timestamp}\n"
-            header += f"👤 From: {sender_name}\n"
-            header += f"📊 Source: {self.source_group.title}\n"
-            header += "━━━━━━━━━━━━━━━━━━\n\n"
-        else:
-            header = ""
-        
-        # Add signal summary if we extracted details
-        summary = ""
-        if signal_details.get('currency_pair'):
-            summary += f"**Pair:** {signal_details['currency_pair']}\n"
-        if signal_details.get('direction'):
-            emoji = "🔴" if signal_details['direction'].upper() == 'SELL' else "🟢"
-            summary += f"**Direction:** {emoji} {signal_details['direction']}\n"
-        if signal_details.get('entry_time'):
-            summary += f"**Entry:** {signal_details['entry_time']}\n"
-        
-        if summary:
-            header += "📈 **Signal Summary:**\n" + summary + "\n"
-            header += "━━━━━━━━━━━━━━━━━━\n\n"
-        
-        return header + original_text
-    
-    async def forward_signal(self, event):
-        """Forward a signal message."""
+        This function:
+        1. Checks if message is from the correct user (if specified)
+        2. Checks if message contains the signal header
+        3. Adds timestamp and formatting
+        4. Forwards to target group
+        """
         try:
             message = event.message
             
@@ -271,13 +249,13 @@ class SignalForwarder:
             if message.edit_date:
                 return
             
-            # Get sender
+            # Get sender information
             sender = await message.get_sender()
             if not sender:
-                logger.warning("Could not get sender information")
+                logger.warning("⚠️ Could not get sender information")
                 return
             
-            # Check if message is from the specific user
+            # Check if we're filtering by specific user
             if self.source_user:
                 if sender.id != self.source_user.id:
                     return  # Not from the specified user
@@ -287,13 +265,11 @@ class SignalForwarder:
             if not message_text:
                 return  # Skip media-only messages
             
-            # Check if it's a signal message
+            # Check if this is a signal message
             if not self.is_signal_message(message_text):
                 return
             
-            logger.info("🎯 Found signal message!")
-            
-            # Get sender name for logging
+            # Get sender display name
             sender_name = "Unknown"
             if hasattr(sender, 'username') and sender.username:
                 sender_name = f"@{sender.username}"
@@ -301,121 +277,163 @@ class SignalForwarder:
                 sender_name = sender.first_name
                 if hasattr(sender, 'last_name') and sender.last_name:
                     sender_name += f" {sender.last_name}"
+            elif hasattr(sender, 'title'):
+                sender_name = sender.title
             
-            logger.info(f"📨 Signal from: {sender_name}")
-            logger.info(f"📝 Preview: {message_text[:100]}...")
-            
-            # Extract signal details
-            signal_details = self.extract_signal_details(message_text)
+            logger.info("🎯" * 30)
+            logger.info(f"📨 NEW SIGNAL DETECTED!")
+            logger.info(f"👤 From: {sender_name}")
+            logger.info(f"📝 Message preview: {message_text[:150]}...")
             
             # Apply delay if configured
             if FORWARD_DELAY > 0:
                 logger.info(f"⏳ Waiting {FORWARD_DELAY} seconds before forwarding...")
                 await asyncio.sleep(FORWARD_DELAY)
             
-            # Format the message
-            formatted_message = self.format_forward_message(
-                message_text,
-                signal_details,
-                sender_name
-            )
+            # Create formatted message
+            formatted_message = message_text
+            
+            # Add timestamp if enabled
+            if ADD_TIMESTAMP:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+                header = f"📡 **SIGNAL FORWARDED**\n"
+                header += f"🕒 {timestamp}\n"
+                header += f"👤 Source: {sender_name}\n"
+                header += f"📊 From: {self.source_group.title}\n"
+                header += "━━━━━━━━━━━━━━━━━━\n\n"
+                formatted_message = header + message_text
             
             # Forward the message
+            logger.info(f"📤 Forwarding to: {self.target_group.title}")
             await self.client.send_message(
                 entity=self.target_group,
                 message=formatted_message
             )
             
-            logger.info(f"✅ Signal forwarded to {self.target_group.title}")
+            logger.info(f"✅ SIGNAL FORWARDED SUCCESSFULLY!")
+            logger.info("🎯" * 30)
             
             # Send confirmation if enabled
             if SEND_CONFIRMATION:
                 try:
+                    confirmation_msg = f"✅ Signal forwarded to {self.target_group.title}"
                     await self.client.send_message(
                         entity=self.source_group,
-                        message=f"✅ Signal forwarded successfully to {self.target_group.title}",
+                        message=confirmation_msg,
                         reply_to=message.id
                     )
-                    logger.info("✅ Sent confirmation message")
+                    logger.info("✅ Sent confirmation message to source group")
                 except Exception as e:
-                    logger.warning(f"Could not send confirmation: {e}")
-            
-            # Log details
-            if signal_details.get('currency_pair'):
-                logger.info(f"📊 Signal details: {signal_details['currency_pair']} {signal_details.get('direction', '')}")
+                    logger.warning(f"⚠️ Could not send confirmation: {e}")
             
         except Exception as e:
-            logger.error(f"❌ Error forwarding signal: {e}")
+            logger.error(f"❌ ERROR FORWARDING MESSAGE: {e}")
     
-    async def start(self):
-        """Start the signal forwarder."""
-        logger.info("="*50)
-        logger.info("🎯 TELEGRAM SIGNAL FORWARDER")
-        logger.info("="*50)
+    async def start_forwarding(self):
+        """
+        Start the signal forwarding service.
         
-        # Validate configuration
-        if not all([API_ID, API_HASH, PHONE_NUMBER, SOURCE_GROUP_URL, TARGET_GROUP_URL]):
-            logger.error("❌ Missing required environment variables")
-            logger.info("Please check: API_ID, API_HASH, PHONE_NUMBER, SOURCE_GROUP_URL, TARGET_GROUP_URL")
+        This is the main loop that:
+        1. Initializes everything
+        2. Sets up message handlers
+        3. Keeps the service running
+        """
+        logger.info("=" * 60)
+        logger.info("🤖 TELEGRAM SIGNAL FORWARDER v2.0")
+        logger.info("=" * 60)
+        
+        # Validate required environment variables
+        required_vars = [
+            ('API_ID', API_ID),
+            ('API_HASH', API_HASH),
+            ('PHONE_NUMBER', PHONE_NUMBER),
+            ('SOURCE_GROUP_URL', SOURCE_GROUP_URL),
+            ('TARGET_GROUP_URL', TARGET_GROUP_URL)
+        ]
+        
+        missing_vars = [name for name, value in required_vars if not value]
+        
+        if missing_vars:
+            logger.error("❌ MISSING REQUIRED ENVIRONMENT VARIABLES:")
+            for var in missing_vars:
+                logger.error(f"   - {var}")
+            logger.info("💡 Please set these in Render.com dashboard → Environment")
+            logger.info("💡 Refer to README.md for setup instructions")
             return
         
-        # Initialize
-        if not await self.initialize():
-            logger.error("❌ Failed to initialize")
+        # Display current configuration
+        logger.info("⚙️ CURRENT CONFIGURATION:")
+        logger.info(f"   Source Group: {SOURCE_GROUP_URL}")
+        logger.info(f"   Target Group: {TARGET_GROUP_URL}")
+        logger.info(f"   Source User: {SOURCE_USERNAME if SOURCE_USERNAME else 'Any user'}")
+        logger.info(f"   Signal Header: '{SIGNAL_HEADER}'")
+        logger.info(f"   Add Timestamp: {ADD_TIMESTAMP}")
+        logger.info(f"   Send Confirmation: {SEND_CONFIRMATION}")
+        logger.info(f"   Forward Delay: {FORWARD_DELAY} seconds")
+        logger.info("=" * 60)
+        
+        # Initialize Telegram client
+        if not await self.initialize_telegram_client():
+            logger.error("❌ Failed to initialize. Check logs above.")
             return
+        
+        # Set up message handler
+        @self.client.on(events.NewMessage(chats=self.source_group))
+        async def message_handler(event):
+            await self.forward_signal_message(event)
         
         self.is_running = True
         
-        # Setup event handler
-        @self.client.on(events.NewMessage(chats=self.source_group))
-        async def message_handler(event):
-            await self.forward_signal(event)
-        
-        # Log configuration
-        logger.info("="*50)
-        logger.info("⚙️ CONFIGURATION")
-        logger.info(f"Source Group: {self.source_group.title}")
-        logger.info(f"Target Group: {self.target_group.title}")
-        if self.source_user:
-            user_name = self.source_user.username or self.source_user.first_name or f"ID: {self.source_user.id}"
-            logger.info(f"Source User: {user_name}")
-        else:
-            logger.info("Source User: Any user")
-        logger.info(f"Signal Header: '{SIGNAL_HEADER}'")
-        logger.info(f"Add Timestamp: {ADD_TIMESTAMP}")
-        logger.info(f"Send Confirmation: {SEND_CONFIRMATION}")
-        logger.info(f"Forward Delay: {FORWARD_DELAY}s")
-        logger.info("="*50)
-        logger.info("📡 LISTENING FOR SIGNALS...")
-        logger.info("="*50)
-        
         # Send startup notification
         try:
-            startup_msg = f"✅ Signal Forwarder Started\n" \
-                         f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" \
-                         f"📊 Listening for: '{SIGNAL_HEADER}'\n" \
-                         f"👤 From: {self.source_user.username if self.source_user else 'Any user'}\n" \
-                         f"📨 To: {self.target_group.title}"
+            startup_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+            startup_msg = (
+                f"✅ **SIGNAL FORWARDER STARTED**\n\n"
+                f"🕒 Started at: {startup_time}\n"
+                f"📡 Status: ACTIVE & MONITORING\n"
+                f"🎯 Looking for: '{SIGNAL_HEADER}'\n"
+                f"👤 From user: {SOURCE_USERNAME if SOURCE_USERNAME else 'Any user'}\n"
+                f"📨 Forwarding to: {self.target_group.title}\n\n"
+                f"🔔 Ready to forward signals!"
+            )
             
             await self.client.send_message(
                 entity=self.target_group,
                 message=startup_msg
             )
-            logger.info("✅ Sent startup notification")
+            logger.info("✅ Startup notification sent to target group")
         except Exception as e:
-            logger.warning(f"Could not send startup notification: {e}")
+            logger.warning(f"⚠️ Could not send startup notification: {e}")
         
-        # Keep running
+        logger.info("=" * 60)
+        logger.info("📡 NOW LISTENING FOR SIGNALS...")
+        logger.info("=" * 60)
+        logger.info("The forwarder is actively monitoring:")
+        logger.info(f"   👉 {self.source_group.title}")
+        logger.info(f"For messages containing:")
+        logger.info(f"   👉 '{SIGNAL_HEADER}'")
+        if SOURCE_USERNAME:
+            logger.info(f"From user:")
+            logger.info(f"   👉 {SOURCE_USERNAME}")
+        logger.info("=" * 60)
+        logger.info("📊 Forwarding to:")
+        logger.info(f"   👉 {self.target_group.title}")
+        logger.info("=" * 60)
+        logger.info("💡 To stop: Go to Render.com → Signal forwarder → Stop")
+        logger.info("📋 Logs: Render.com dashboard → Logs")
+        logger.info("=" * 60)
+        
+        # Keep the client running
         try:
             await self.client.run_until_disconnected()
         except asyncio.CancelledError:
-            logger.info("Received shutdown signal")
+            logger.info("🛑 Received shutdown signal")
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"❌ Unexpected error: {e}")
         finally:
-            await self.stop()
+            await self.stop_forwarder()
     
-    async def stop(self):
+    async def stop_forwarder(self):
         """Stop the forwarder gracefully."""
         if not self.is_running:
             return
@@ -424,28 +442,55 @@ class SignalForwarder:
         self.is_running = False
         
         if self.client:
-            await self.client.disconnect()
-            logger.info("✅ Disconnected from Telegram")
+            try:
+                await self.client.disconnect()
+                logger.info("✅ Disconnected from Telegram")
+            except Exception as e:
+                logger.error(f"❌ Error disconnecting: {e}")
         
-        logger.info("👋 Signal forwarder stopped")
+        logger.info("👋 Signal forwarder stopped successfully")
 
 async def main():
-    forwarder = SignalForwarder()
+    """
+    Main entry point for the application.
+    
+    This function:
+    1. Creates the forwarder instance
+    2. Starts the forwarding service
+    3. Handles graceful shutdown
+    """
+    forwarder = TelegramSignalForwarder()
     
     try:
-        await forwarder.start()
+        await forwarder.start_forwarding()
     except KeyboardInterrupt:
-        logger.info("\nReceived keyboard interrupt")
-        await forwarder.stop()
+        logger.info("\n🛑 Received keyboard interrupt (for local testing)")
+        await forwarder.stop_forwarder()
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        await forwarder.stop()
+        logger.error(f"💥 FATAL ERROR: {e}")
+        await forwarder.stop_forwarder()
+
+# ============================================================================
+# APPLICATION STARTUP
+# ============================================================================
 
 if __name__ == "__main__":
     # Check Python version
     if sys.version_info < (3, 7):
         logger.error("❌ Python 3.7 or higher is required")
+        logger.error("💡 Please set Python version to 3.11.0 in runtime.txt")
         sys.exit(1)
     
+    # Check if running on Render
+    is_render = os.getenv('RENDER', 'false').lower() == 'true'
+    if is_render:
+        logger.info("🌐 Running on Render.com cloud platform")
+    
     # Run the application
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("\n👋 Application stopped by user")
+    except Exception as e:
+        logger.error(f"💥 Application crashed: {e}")
+        sys.exit(1)
