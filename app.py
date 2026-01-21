@@ -21,7 +21,7 @@ API_HASH = os.getenv('API_HASH', '')
 PHONE_NUMBER = os.getenv('PHONE_NUMBER', '')
 SOURCE_GROUP_URL = os.getenv('SOURCE_GROUP_URL', 'https://t.me/iosassembly')
 TARGET_GROUP_URL = os.getenv('TARGET_GROUP_URL', 'https://t.me/acctdeveloperselling')
-SOURCE_USERNAME = os.getenv('SOURCE_USERNAME', '@Systembadgetickverify02')
+SOURCE_USERNAME = os.getenv('SOURCE_USERNAME', '@ssystembadgetickverify02')
 SIGNAL_HEADER = os.getenv('SIGNAL_HEADER', '🔔 NEW SIGNAL!')
 ADD_TIMESTAMP = os.getenv('ADD_TIMESTAMP', 'true').lower() == 'true'
 
